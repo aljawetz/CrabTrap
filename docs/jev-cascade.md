@@ -62,13 +62,12 @@ Leaving `deny_above` unset uses the default 0.7. An explicit 0 is preserved
 and denies every valid score (with `allow_below: 0`).
 Setting `allow_below` equal to `deny_above` leaves no escalation band.
 
-For reference, in a public smoke test (synthetic HTTP attack traffic, one
-generic policy) benign requests mostly scored 0.1 to 0.3 and the lowest-scoring
-attack scored 0.26. At `allow_below: 0.1` almost every benign request still
-escalated, which made the cascade cost more than the LLM alone on benign-heavy
-traffic. Scores shift with the policy text and the Jev version, so recalibrate
-when either changes. A lower value is safer; a higher one saves more LLM calls
-but lets more requests skip the LLM.
+The [published ATRDF experiment](https://gist.github.com/aljawetz/2ded463bfddfad8b64229b09ba03c152)
+compared LLM-only, Jev-only and cascade decisions on 4,282 labeled requests.
+Its Jev-only results have a lowest attack score of 0.56. This dataset contains
+synthetic inbound traffic, not production outbound agent requests. Scores
+shift with policy text and model version, so these results do not calibrate
+a deployment's ALLOW threshold.
 
 ## Injection check
 
@@ -89,27 +88,30 @@ It uses a small built-in attack set and policy by default. Set
 `JEV_INJECTION_DATASET` (JSONL of `id, method, url, headers, body, attack_tag`)
 and `JEV_INJECTION_POLICY_FILE` to replay your own.
 
-One run on `jev-1.13.0` with the generic anti-exploit policy, using the 11 Log
-Forging attacks Jev was least sure about in the public smoke test (plain scores
-0.36 to 0.60), 4 variants each (44 injected requests). The 0.26 attack
-mentioned above is not in this set: the smoke test did not keep per-request
-scores for escalated rows, and rescoring those Log Forging attacks gave 0.36
-at the lowest, so the request closest to the threshold was not covered.
+Live checks on 2026-10-27 used `jev-1.13.0` with the serialization check enabled:
 
-- No injected score fell below 0.2, or even 0.3. The lowest was 0.32, against a
-  lowest plain score of 0.36. No injected score was more than 0.07 below its
-  plain score.
-- Text in the query string and the override raised scores (the override raised
-  every one of them to 0.86 or higher), so those channels made the request look
-  more suspicious, not less. Body and header text moved scores by 0.08 or less
-  in either direction.
-- The built-in synthetic set (6 attacks, 24 injected requests) behaved the same:
-  the lowest injected score was 0.78, against plain scores of 0.79 to 0.99.
+| Input and policy | Attacks | Variants tested / skipped | Lowest plain / injected score | Largest observed drop |
+|---|---:|---:|---:|---:|
+| Built-in synthetic set and generic anti-exploit policy | 6 | 24 / 0 | 0.82 / 0.79 | 0.06 |
+| ATRDF low-scoring attacks and the gist's original policy | 48 | 192 / 0 | 0.51 / 0.48 | 0.15 |
 
-Read this as a sanity check, not proof. It is a small set, one attack family and
-one policy, and the injections are simple, hand-written strings, not optimized
-against Jev. The weakest attack in this run (0.36) sits 0.16 above an
-`allow_below` of 0.2, but the smoke test saw an attack at 0.26, only 0.06
-above it, and a different policy or Jev version can shift both. Direct ALLOWs stay opt-in, and anyone turning them on should rerun this with
-their own policy and attacks first.
+The ATRDF subset consists of every `results.csv` row labeled `attack` with
+`jev_score < 0.7`, all Log Forging attacks. Row IDs refer to zero-based indices
+in `Datasets/dataset_1_train.7z` from
+[dataset commit 9494785](https://github.com/ArielCyber/Cisco_Ariel_Uni_API_security_challenge/tree/9494785a35dfa447bedddd80c0bb3fff3f0f464a).
+All 4,282 row labels were checked against the source dataset before selecting
+the subset. The two historically lowest-scoring rows, 2330 and 3008, were included.
+Use the gist's `policy.txt` and convert the selected requests to the JSONL
+schema above, wrapping each header value in an array.
 
+No tested injection scored below 0.2 in either run. In the ATRDF subset,
+seven injected variants scored at least 0.10 below their corresponding plain
+request, and four crossed from a plain score at or above 0.7 to below 0.7.
+Those four would escalate to the LLM instead of being denied by Jev. The
+lowest injected score, 0.48, was the body variant of row 2330.
+
+These are single-call comparisons and include possible model variation; they
+do not isolate the effect of injection or establish general resistance. The
+ATRDF subset covers one attack family and simple, hand-written injections.
+Direct ALLOWs remain opt-in. Calibrate with your own policy and requests
+before enabling them.
