@@ -57,7 +57,8 @@ Turn `allow_below` on only after calibrating it for your policy.
 
 `allow_below` and `deny_above` default independently: set one and the other
 keeps its default. Both must be in [0, 1] with `allow_below <= deny_above`.
-Leaving `deny_above` unset or at 0 uses the default 0.7.
+Leaving `deny_above` unset uses the default 0.7. An explicit 0 is preserved
+and denies every valid score (with `allow_below: 0`).
 Setting `allow_below` equal to `deny_above` leaves no escalation band.
 
 For reference, in a public smoke test (synthetic HTTP attack traffic, one

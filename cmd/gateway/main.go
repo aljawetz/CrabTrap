@@ -163,7 +163,7 @@ func main() {
 			if cfg.LLMJudge.Jev.BaseURL != "" {
 				jevEval.SetBaseURL(cfg.LLMJudge.Jev.BaseURL)
 			}
-			allowBelow, denyAbove := cfg.LLMJudge.Jev.AllowBelow, cfg.LLMJudge.Jev.DenyAbove
+			allowBelow, denyAbove := *cfg.LLMJudge.Jev.AllowBelow, *cfg.LLMJudge.Jev.DenyAbove
 			liveJudge = &judge.JevCascadeEvaluator{
 				Primary:    jevEval,
 				Secondary:  llmJudge,

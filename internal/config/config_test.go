@@ -167,7 +167,7 @@ func TestValidateJevRequiresAPIKey(t *testing.T) {
 		LLMJudge: LLMJudgeConfig{
 			Enabled:  true,
 			Provider: "bedrock-anthropic",
-			Jev:      JevConfig{Enabled: true, AllowBelow: 0.3, DenyAbove: 0.7},
+			Jev:      JevConfig{Enabled: true, AllowBelow: threshold(0.3), DenyAbove: threshold(0.7)},
 		},
 	}
 	if err := config.validate(); err == nil {
@@ -184,7 +184,7 @@ func TestValidateJevRejectsNegativeTimeout(t *testing.T) {
 		LLMJudge: LLMJudgeConfig{
 			Enabled:  true,
 			Provider: "bedrock-anthropic",
-			Jev:      JevConfig{Enabled: true, APIKey: "k", Timeout: -5 * time.Second, DenyAbove: 0.7},
+			Jev:      JevConfig{Enabled: true, APIKey: "k", Timeout: -5 * time.Second, DenyAbove: threshold(0.7)},
 		},
 	}
 	if err := config.validate(); err == nil || !strings.Contains(err.Error(), "timeout must not be negative") {
@@ -201,7 +201,7 @@ func TestValidateJevBand(t *testing.T) {
 		LLMJudge: LLMJudgeConfig{
 			Enabled:  true,
 			Provider: "bedrock-anthropic",
-			Jev:      JevConfig{Enabled: true, APIKey: "k", AllowBelow: 0.8, DenyAbove: 0.2},
+			Jev:      JevConfig{Enabled: true, APIKey: "k", AllowBelow: threshold(0.8), DenyAbove: threshold(0.2)},
 		},
 	}
 	if err := config.validate(); err == nil {
@@ -218,7 +218,7 @@ func TestValidateJevOK(t *testing.T) {
 		LLMJudge: LLMJudgeConfig{
 			Enabled:  true,
 			Provider: "bedrock-anthropic",
-			Jev:      JevConfig{Enabled: true, APIKey: "k", AllowBelow: 0.3, DenyAbove: 0.7},
+			Jev:      JevConfig{Enabled: true, APIKey: "k", AllowBelow: threshold(0.3), DenyAbove: threshold(0.7)},
 		},
 	}
 	if err := config.validate(); err != nil {
@@ -226,15 +226,17 @@ func TestValidateJevOK(t *testing.T) {
 	}
 }
 
+func threshold(v float64) *float64 { return &v }
+
 func TestJevDefaults(t *testing.T) {
 	config := &Config{LLMJudge: LLMJudgeConfig{Jev: JevConfig{Enabled: true}}}
 	config.applyDefaults()
 
-	if config.LLMJudge.Jev.AllowBelow != 0 {
-		t.Fatalf("allow_below=%v, want 0 (direct ALLOW is opt-in)", config.LLMJudge.Jev.AllowBelow)
+	if *config.LLMJudge.Jev.AllowBelow != 0 {
+		t.Fatalf("allow_below=%v, want 0 (direct ALLOW is opt-in)", *config.LLMJudge.Jev.AllowBelow)
 	}
-	if config.LLMJudge.Jev.DenyAbove != 0.7 {
-		t.Fatalf("deny_above=%v, want 0.7", config.LLMJudge.Jev.DenyAbove)
+	if *config.LLMJudge.Jev.DenyAbove != 0.7 {
+		t.Fatalf("deny_above=%v, want 0.7", *config.LLMJudge.Jev.DenyAbove)
 	}
 	if config.LLMJudge.Jev.Model != "jev-1.13.0" {
 		t.Fatalf("model=%q, want pinned jev-1.13.0", config.LLMJudge.Jev.Model)
@@ -244,20 +246,21 @@ func TestJevDefaults(t *testing.T) {
 func TestJevThresholdsDefaultIndependently(t *testing.T) {
 	tests := []struct {
 		name                       string
-		allowBelow, denyAbove      float64
+		allowBelow, denyAbove      *float64
 		wantAllowBelow, wantDenyAb float64
 	}{
-		{"both unset", 0, 0, 0, 0.7},
-		{"only allow_below set", 0.1, 0, 0.1, 0.7},
-		{"only deny_above set", 0, 0.9, 0, 0.9},
-		{"both set", 0.2, 0.8, 0.2, 0.8},
+		{"both unset", nil, nil, 0, 0.7},
+		{"only allow_below set", threshold(0.1), nil, 0.1, 0.7},
+		{"only deny_above set", nil, threshold(0.9), 0, 0.9},
+		{"both set", threshold(0.2), threshold(0.8), 0.2, 0.8},
+		{"explicit zeros", threshold(0), threshold(0), 0, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &Config{LLMJudge: LLMJudgeConfig{Jev: JevConfig{Enabled: true, AllowBelow: tt.allowBelow, DenyAbove: tt.denyAbove}}}
 			config.applyDefaults()
-			if got := config.LLMJudge.Jev; got.AllowBelow != tt.wantAllowBelow || got.DenyAbove != tt.wantDenyAb {
-				t.Fatalf("got allow_below=%v deny_above=%v, want %v and %v", got.AllowBelow, got.DenyAbove, tt.wantAllowBelow, tt.wantDenyAb)
+			if got := config.LLMJudge.Jev; *got.AllowBelow != tt.wantAllowBelow || *got.DenyAbove != tt.wantDenyAb {
+				t.Fatalf("got allow_below=%v deny_above=%v, want %v and %v", *got.AllowBelow, *got.DenyAbove, tt.wantAllowBelow, tt.wantDenyAb)
 			}
 		})
 	}
@@ -290,7 +293,7 @@ func TestValidateJevThresholds(t *testing.T) {
 				LLMJudge: LLMJudgeConfig{
 					Enabled:  true,
 					Provider: "bedrock-anthropic",
-					Jev:      JevConfig{Enabled: true, APIKey: "k", AllowBelow: tt.allowBelow, DenyAbove: tt.denyAbove},
+					Jev:      JevConfig{Enabled: true, APIKey: "k", AllowBelow: threshold(tt.allowBelow), DenyAbove: threshold(tt.denyAbove)},
 				},
 			}
 			err := config.validate()
@@ -330,16 +333,22 @@ llm_judge:
 `
 	t.Run("only allow_below", func(t *testing.T) {
 		cfg := mustLoadConfig(t, base+"    allow_below: 0.1\n")
-		allowBelow, denyAbove := cfg.LLMJudge.Jev.AllowBelow, cfg.LLMJudge.Jev.DenyAbove
+		allowBelow, denyAbove := *cfg.LLMJudge.Jev.AllowBelow, *cfg.LLMJudge.Jev.DenyAbove
 		if allowBelow != 0.1 || denyAbove != 0.7 {
 			t.Fatalf("got %v and %v, want 0.1 and 0.7", allowBelow, denyAbove)
 		}
 	})
 	t.Run("only deny_above", func(t *testing.T) {
 		cfg := mustLoadConfig(t, base+"    deny_above: 0.9\n")
-		allowBelow, denyAbove := cfg.LLMJudge.Jev.AllowBelow, cfg.LLMJudge.Jev.DenyAbove
+		allowBelow, denyAbove := *cfg.LLMJudge.Jev.AllowBelow, *cfg.LLMJudge.Jev.DenyAbove
 		if allowBelow != 0 || denyAbove != 0.9 {
 			t.Fatalf("got %v and %v, want 0 and 0.9", allowBelow, denyAbove)
+		}
+	})
+	t.Run("explicit zero deny threshold", func(t *testing.T) {
+		cfg := mustLoadConfig(t, base+"    allow_below: 0\n    deny_above: 0\n")
+		if *cfg.LLMJudge.Jev.AllowBelow != 0 || *cfg.LLMJudge.Jev.DenyAbove != 0 {
+			t.Fatal("explicit zero thresholds must survive loading and defaults")
 		}
 	})
 }
