@@ -30,11 +30,12 @@ which can shift scores under thresholds you already calibrated. Short-circuit
 audits record the configured `model`.
 
 - Admin evals do not run Jev. Replay checks static rules first, then uses the
-  LLM if no rule matches. For audit entries that Jev decided
-  (`approved_by: jev`), agreement measures the replay decision against Jev's
-  original decision. The eval view marks these entries. For entries decided
-  after Jev escalated (`jev+llm`), replay compares against the original LLM
-  decision; the replay itself may still be decided by a static rule.
+  LLM if no rule matches. Labeled entries are always compared against their
+  label. For unlabeled audit entries that Jev decided (`approved_by: jev`),
+  agreement measures the replay decision against Jev's original decision. The
+  eval view marks these entries. For unlabeled entries decided after Jev
+  escalated (`jev+llm`), replay compares against the original LLM decision; the
+  replay itself may still be decided by a static rule.
 - Policy builder still needs a generative LLM.
 - Audit rows show how a request was decided (`Channel` stays `llm`, same as static rules):
   - `approved_by: jev`: Jev decided alone (an ALLOW or DENY short-circuit). The model is the configured Jev `model`.
@@ -44,7 +45,7 @@ audits record the configured `model`.
   The Audit Trail Approver filter has options for `jev` and `jev+llm`.
 - Jev never queues: if all `max_concurrency` slots are busy or its circuit breaker is open, the request goes straight to the LLM and counts as `outcome=skipped`, not `error`. Worst-case latency on escalation is `jev.timeout` plus the LLM call.
 - Jev reuses `llm_judge.max_concurrency` and the circuit-breaker settings (separate instance, same numbers).
-- Jev's circuit breaker counts 5xx, 429, timeouts and transport errors. Other 4xx responses (for example a request Jev rejects as too large, or a bad API key) escalate to the LLM as `outcome=error` but do not trip the breaker.
+- Jev's circuit breaker counts 5xx, 429, 401/403 (a bad or revoked API key), timeouts and transport errors. Other 4xx responses (for example a request Jev rejects as too large) escalate to the LLM as `outcome=error` but do not trip the breaker.
 - Metrics: `crabtrap_jev_decisions_total{outcome=allow|deny|escalate|error|skipped}`, plus Jev's circuit breaker and call latency under the existing `crabtrap_llm_circuit_breaker_*` and `crabtrap_judge_latency_seconds` metrics with `provider="jev"`.
 - A caller that disconnects mid-call does not count toward Jev's circuit breaker or `outcome=error`, and the request is not escalated to the LLM; Jev's own timeouts and transport errors still count.
 
@@ -80,6 +81,9 @@ Jev API, so it only runs when you opt in (a key alone is not enough):
 ```
 JEV_INJECTION_EVAL=1 TYPESAFE_API_KEY=... go test ./internal/judge -run TestJevInjectionEval -v -count=1
 ```
+
+Variants whose injection text is removed or truncated by request serialization
+are reported as skipped and excluded from the score counts.
 
 It uses a small built-in attack set and policy by default. Set
 `JEV_INJECTION_DATASET` (JSONL of `id, method, url, headers, body, attack_tag`)
