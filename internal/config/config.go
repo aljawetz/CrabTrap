@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"time"
@@ -108,6 +109,24 @@ type LLMJudgeConfig struct {
 	AnthropicBaseURL        string        `yaml:"anthropic_base_url"`        // override Anthropic API base URL (e.g. for proxies)
 	OpenAIAPIKey            string        `yaml:"openai_api_key"`            // API key for OpenAI provider (or env OPENAI_API_KEY)
 	OpenAIBaseURL           string        `yaml:"openai_base_url"`           // override OpenAI API base URL (e.g. for proxies)
+	Jev                     JevConfig     `yaml:"jev"`                       // optional Jev cascade pre-filter (default off)
+}
+
+// JevConfig configures an optional TypeSafe Jev pre-filter in front of the LLM
+// judge. When Enabled is false (the default), the live path is unchanged.
+// Scores below AllowBelow or at or above DenyAbove short-circuit. Scores in
+// the middle band (and Jev errors) escalate to the configured LLM.
+//
+// Direct ALLOWs are opt-in: AllowBelow defaults to 0, which means only DENY
+// short-circuits until an operator sets it. A DenyAbove of 0 means unset.
+type JevConfig struct {
+	Enabled    bool          `yaml:"enabled"`
+	APIKey     string        `yaml:"api_key"`     // or env TYPESAFE_API_KEY
+	Model      string        `yaml:"model"`       // default jev-1.13.0; pin a version, aliases move
+	Timeout    time.Duration `yaml:"timeout"`     // default 5s
+	AllowBelow float64       `yaml:"allow_below"` // noul < this → ALLOW (default 0, direct ALLOW off)
+	DenyAbove  float64       `yaml:"deny_above"`  // noul >= this → DENY (default 0.7)
+	BaseURL    string        `yaml:"base_url"`    // optional override (tests)
 }
 
 // AuditConfig contains audit logging settings
@@ -178,6 +197,7 @@ func (c *Config) expandEnvVars() {
 	// Expand LLM API keys
 	c.LLMJudge.AnthropicAPIKey = envutil.Expand(c.LLMJudge.AnthropicAPIKey)
 	c.LLMJudge.OpenAIAPIKey = envutil.Expand(c.LLMJudge.OpenAIAPIKey)
+	c.LLMJudge.Jev.APIKey = envutil.Expand(c.LLMJudge.Jev.APIKey)
 }
 
 // applyDefaults sets default values for unspecified config fields
@@ -223,6 +243,23 @@ func (c *Config) applyDefaults() {
 	}
 	if c.LLMJudge.OpenAIAPIKey == "" {
 		c.LLMJudge.OpenAIAPIKey = os.Getenv("OPENAI_API_KEY")
+	}
+	if c.LLMJudge.Jev.APIKey == "" {
+		c.LLMJudge.Jev.APIKey = os.Getenv("TYPESAFE_API_KEY")
+	}
+	if c.LLMJudge.Jev.Model == "" {
+		c.LLMJudge.Jev.Model = "jev-1.13.0"
+	}
+	if c.LLMJudge.Jev.Timeout == 0 {
+		c.LLMJudge.Jev.Timeout = 5 * time.Second
+	}
+	// allow_below has no default on purpose: direct ALLOWs are opt-in. Jev sees
+	// less prompt hardening than the LLM judge, so a body can try to pull its
+	// score under the threshold. Scores also shift with the policy text and Jev
+	// version, so operators should calibrate allow_below against labeled
+	// evidence before enabling it.
+	if c.LLMJudge.Jev.DenyAbove == 0 {
+		c.LLMJudge.Jev.DenyAbove = 0.7
 	}
 	if c.LLMJudge.EvalModel == "" {
 		c.LLMJudge.EvalModel = "anthropic.claude-opus-4-5-20251101-v2:0"
@@ -327,6 +364,27 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("llm_judge.provider must be one of: bedrock-anthropic, anthropic, openai (got %q)", c.LLMJudge.Provider)
 		}
+
+		if c.LLMJudge.Jev.Enabled {
+			if c.LLMJudge.Jev.APIKey == "" {
+				return fmt.Errorf("llm_judge.jev.api_key is required when llm_judge.jev.enabled is true (or set TYPESAFE_API_KEY)")
+			}
+			if c.LLMJudge.Jev.Timeout < 0 {
+				return fmt.Errorf("llm_judge.jev.timeout must not be negative (got %v)", c.LLMJudge.Jev.Timeout)
+			}
+			allowBelow, denyAbove := c.LLMJudge.Jev.AllowBelow, c.LLMJudge.Jev.DenyAbove
+			if math.IsNaN(allowBelow) || allowBelow < 0 || allowBelow > 1 {
+				return fmt.Errorf("llm_judge.jev.allow_below must be between 0 and 1 (got %v)", allowBelow)
+			}
+			if math.IsNaN(denyAbove) || denyAbove < 0 || denyAbove > 1 {
+				return fmt.Errorf("llm_judge.jev.deny_above must be between 0 and 1 (got %v)", denyAbove)
+			}
+			if allowBelow > denyAbove {
+				return fmt.Errorf("llm_judge.jev.allow_below must be <= deny_above (got allow_below=%v deny_above=%v)", allowBelow, denyAbove)
+			}
+		}
+	} else if c.LLMJudge.Jev.Enabled {
+		return fmt.Errorf("llm_judge.jev.enabled requires llm_judge.enabled")
 	}
 
 	for _, cidr := range c.Proxy.AllowedPrivateCIDRs {
