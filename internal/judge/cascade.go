@@ -56,6 +56,15 @@ var _ Evaluator = (*JevCascadeEvaluator)(nil)
 
 // Evaluate implements Evaluator.
 func (c *JevCascadeEvaluator) Evaluate(ctx context.Context, method, rawURL string, headers http.Header, body string, policy types.LLMPolicy) (JudgeResult, error) {
+	if c.Secondary == nil {
+		return JudgeResult{}, fmt.Errorf("jev cascade secondary evaluator is required")
+	}
+	// Without Jev this is a plain LLM decision, same as when Jev is unavailable.
+	if c.Primary == nil {
+		c.observe(JevCascadeSkipped)
+		return c.Secondary.Evaluate(ctx, method, rawURL, headers, body, policy)
+	}
+
 	primary, err := c.Primary.Score(ctx, method, rawURL, headers, body, policy)
 	if err == nil && primary.Score == nil {
 		err = errors.New("jev returned no score")

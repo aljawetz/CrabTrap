@@ -73,6 +73,29 @@ func TestJevCascade_AllowBelowShortCircuits(t *testing.T) {
 	}
 }
 
+func TestJevCascade_NilPrimaryUsesLLM(t *testing.T) {
+	var llmCalls int32
+	obs := &cascadeObs{}
+	c := &JevCascadeEvaluator{Secondary: countingLLM("DENY", &llmCalls), AllowBelow: 0, DenyAbove: 0.7, Observer: obs}
+	res, err := c.Evaluate(context.Background(), "GET", "https://api.github.com/", nil, "", types.LLMPolicy{Prompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Decision != types.DecisionDeny || res.DecidedBy != "" || atomic.LoadInt32(&llmCalls) != 1 {
+		t.Fatalf("decision=%s decided_by=%q llm_calls=%d", res.Decision, res.DecidedBy, llmCalls)
+	}
+	if got := obs.get(); got != JevCascadeSkipped {
+		t.Fatalf("outcome=%q, want %q", got, JevCascadeSkipped)
+	}
+}
+
+func TestJevCascade_NilSecondaryErrors(t *testing.T) {
+	c := &JevCascadeEvaluator{Primary: jevServer(t, 0.9), DenyAbove: 0.7}
+	if _, err := c.Evaluate(context.Background(), "GET", "https://api.github.com/", nil, "", types.LLMPolicy{Prompt: "p"}); err == nil {
+		t.Fatal("expected an error for a nil Secondary")
+	}
+}
+
 func TestJevCascade_ZeroAllowBelowUsesLLM(t *testing.T) {
 	var llmCalls int32
 	c := &JevCascadeEvaluator{

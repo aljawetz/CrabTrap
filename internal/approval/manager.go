@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -76,8 +77,15 @@ func (m *Manager) SetMode(mode string) {
 }
 
 // SetJudge configures the request evaluator (LLM judge, Jev cascade evaluator, etc.)
-// and switches the manager to the given mode.
+// and switches the manager to the given mode. A nil pointer (e.g. a nil
+// *judge.LLMJudge) is treated as no judge, so requests use the fallback
+// instead of panicking.
 func (m *Manager) SetJudge(j judge.Evaluator, mode, fallbackMode string) {
+	if j != nil {
+		if v := reflect.ValueOf(j); v.Kind() == reflect.Pointer && v.IsNil() {
+			j = nil
+		}
+	}
 	m.judge = j
 	m.SetMode(mode)
 	m.fallbackMode = fallbackMode

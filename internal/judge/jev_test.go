@@ -156,16 +156,18 @@ func TestJevEvaluator_NonOKStatus(t *testing.T) {
 	}
 }
 
-// Only 5xx and 429 trip the breaker. Other 4xx come from the request or the
-// key, not from Jev being unhealthy.
+// 5xx, 429, and authentication failures trip the breaker. Other 4xx are
+// request-specific and must not disable Jev for everyone.
 func TestJevEvaluator_BreakerCountsOnlyServerSideStatuses(t *testing.T) {
 	for _, tc := range []struct {
 		status    int
 		wantTrips bool
 	}{
 		{http.StatusBadRequest, false},
-		{http.StatusUnauthorized, false},
+		{http.StatusNotFound, false},
 		{http.StatusRequestEntityTooLarge, false},
+		{http.StatusUnauthorized, true},
+		{http.StatusForbidden, true},
 		{http.StatusTooManyRequests, true},
 		{http.StatusInternalServerError, true},
 		{http.StatusServiceUnavailable, true},
@@ -259,6 +261,14 @@ func TestJevEvaluator_RejectsOutOfRangeScore(t *testing.T) {
 func TestNewJevEvaluator_RequiresAPIKey(t *testing.T) {
 	if _, err := NewJevEvaluator("", testJevModel, time.Second); err == nil {
 		t.Fatal("expected error for empty API key")
+	}
+}
+
+func TestNewJevEvaluator_RequiresPositiveTimeout(t *testing.T) {
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		if _, err := NewJevEvaluator("k", testJevModel, timeout); err == nil {
+			t.Fatalf("expected error for timeout %v", timeout)
+		}
 	}
 }
 

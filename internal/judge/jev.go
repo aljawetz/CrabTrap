@@ -42,6 +42,10 @@ func NewJevEvaluator(apiKey, model string, timeout time.Duration, opts ...llm.Re
 	if apiKey == "" {
 		return nil, fmt.Errorf("jev API key is required")
 	}
+	// A zero timeout would expire every call immediately and trip the breaker.
+	if timeout <= 0 {
+		return nil, fmt.Errorf("jev timeout must be positive (got %v)", timeout)
+	}
 	res := llm.NewResilience(opts...)
 	// The default transport keeps only 2 idle connections per host, so most
 	// concurrent calls would pay for a fresh TLS handshake.
@@ -174,12 +178,15 @@ func (j *JevEvaluator) Score(ctx context.Context, method, rawURL string, headers
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != http.StatusOK {
-		// Only 5xx and 429 say Jev itself is in trouble. Other 4xx responses
-		// come from this request (or the key), so they must not trip the
-		// breaker for everyone else; they count as neither failure nor success.
-		if httpResp.StatusCode >= 500 || httpResp.StatusCode == http.StatusTooManyRequests {
+		// 5xx and 429 say Jev itself is in trouble, and 401/403 mean the key is
+		// bad, which fails every request the same way. Other 4xx responses come
+		// from this request, so they must not trip the breaker for everyone
+		// else; they count as neither failure nor success.
+		switch code := httpResp.StatusCode; {
+		case code >= 500, code == http.StatusTooManyRequests,
+			code == http.StatusUnauthorized, code == http.StatusForbidden:
 			j.RecordFailure()
-		} else {
+		default:
 			j.RecordCancellation()
 		}
 		// Drain a bounded amount so the connection can be reused, but never
@@ -193,7 +200,9 @@ func (j *JevEvaluator) Score(ctx context.Context, method, rawURL string, headers
 	var respBody jevResponse
 	err = json.NewDecoder(httpResp.Body).Decode(&respBody)
 	// Do returns once headers arrive, so measure through the body read to
-	// include a slow response body in the recorded duration.
+	// include a slow response body in the recorded duration. The deferred
+	// latency sample above also runs after the body read, so the histogram
+	// matches the persisted DurationMs.
 	partial.DurationMs = elapsedMs()
 	if err != nil {
 		recordTransportFailure()
